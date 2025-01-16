@@ -6,12 +6,7 @@ export const guidLinks = [
 
 //构建系统相关语法
 export const struct_pb_Links = [
-    { text: 'struct_pb简介', link: '/zh/struct_pb/struct_pb_intro' },
-    { text: '快速开始', link: '/zh/struct_pb/struct_pb_quick_start' },
-    { text: '特性支持', link: '/zh/struct_pb/struct_pb_supported_features' },
-    { text: '使用proto3', link: '/zh/struct_pb/struct_pb_guide_proto3' },
-    { text: '生成结构体', link: '/zh/struct_pb/struct_pb_generating_your_struct' },
-    { text: 'struct_pb API', link: '/zh/struct_pb/struct_pb_api' },
+    { text: 'struct_pb简介', link: '/zh/struct_pb/struct_pb_intro' }
 ];
 
 export const struct_pack_Links = [
@@ -24,18 +19,28 @@ export const struct_pack_Links = [
 
 export const coro_rpc_Links = [
     { text: 'coro_rpc简介', link: '/zh/coro_rpc/coro_rpc_introduction' },
+    { text: 'coro_rpc客户端介绍', link: '/zh/coro_rpc/coro_rpc_client' },
+    { text: 'coro_rpc服务端介绍', link: '/zh/coro_rpc/coro_rpc_server' },
 ];
 
 export const easylog_Links = [
     { text: 'easylog简介', link: '/zh/easylog/easylog_introduction' },
 ];
 
-export const coro_http_client_Links = [
-    { text: 'coro_http_client简介', link: '/zh/coro_http_client/coro_http_client_introduction' },
+export const coro_http_Links = [
+    { text: 'coro_http 简介', link: '/zh/coro_http/coro_http_introduction' },
 ];
 
 export const struct_xxx_Links = [
     { text: 'struct_xml struct_json struct_yaml 简介', link: '/zh/struct_xxx/struct_xxx_introduction' },
+];
+
+export const metric_Links = [
+    { text: 'metric简介', link: '/zh/metric/metric_introduction' },
+];
+
+export const reflection_Links = [
+    { text: 'reflection简介', link: '/zh/reflection/reflection_introduction' },
 ];
 
 export const aboutLinks = [

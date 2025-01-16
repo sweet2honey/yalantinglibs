@@ -153,6 +153,36 @@ constexpr decltype(auto) get_type_end_flag() {
   }
 }
 
+template <typename T>
+constexpr sp_config get_type_config() {
+  if constexpr (struct_pack::detail::user_defined_config_by_ADL<T>) {
+    return set_sp_config((T *)nullptr);
+  }
+  else if constexpr (struct_pack::detail::user_defined_config<T>) {
+    return static_cast<sp_config>(T::struct_pack_config);
+  }
+  else if constexpr (struct_pack::detail::has_default_config<T>) {
+    return set_default(decltype(delay_sp_config_eval<T>()){});
+  }
+  else {
+    return sp_config::DEFAULT;
+  }
+}
+template <typename T, typename... Args>
+constexpr uint64_t get_parent_tag_impl() {
+  return static_cast<uint64_t>(get_type_config<T>());
+}
+
+template <typename... Args>
+constexpr uint64_t get_parent_tag() {
+  if constexpr (sizeof...(Args) == 0) {
+    return 0;
+  }
+  else {
+    return get_parent_tag_impl<Args...>();
+  }
+}
+
 template <typename Args, typename... ParentArgs, std::size_t... I>
 constexpr decltype(auto) get_type_literal(std::index_sequence<I...>);
 
@@ -164,6 +194,22 @@ constexpr decltype(auto) get_type_literal() {
   if constexpr (is_trivial_view_v<Arg>) {
     return get_type_literal<typename Arg::value_type, ParentArgs...>();
   }
+  else if constexpr (user_defined_serialization<Arg>) {
+    constexpr auto begin = string_literal<char, 1>{
+        {static_cast<char>(type_id::user_defined_type)}};
+    constexpr auto end =
+        string_literal<char, 1>{{static_cast<char>(type_id::type_end_flag)}};
+    if constexpr (user_defined_type_name<Arg>) {
+      constexpr auto type_name = sp_set_type_name((Arg *)nullptr);
+      string_literal<char, type_name.size()> ret{type_name};
+      return begin + ret + end;
+    }
+    else {
+      constexpr auto type_name = type_string<Arg>();
+      string_literal<char, type_name.size()> ret{type_name};
+      return begin + ret + end;
+    }
+  }
   else {
     constexpr std::size_t has_cycle = check_circle<Arg, ParentArgs...>();
     if constexpr (has_cycle != 0) {
@@ -173,7 +219,8 @@ constexpr decltype(auto) get_type_literal() {
              get_size_literal<has_cycle - 2>();
     }
     else {
-      constexpr auto id = get_type_id<Arg>();
+      constexpr auto parent_tag = get_parent_tag<ParentArgs...>();
+      constexpr auto id = get_type_id<Arg, parent_tag>();
       constexpr auto begin = string_literal<char, 1>{{static_cast<char>(id)}};
       if constexpr (id == type_id::struct_t) {
         using Args = decltype(get_types<Arg>());
@@ -282,6 +329,22 @@ template <typename T, typename... Args>
 constexpr decltype(auto) get_types_literal() {
   if constexpr (is_trivial_view_v<T>) {
     return get_types_literal<T::value_type, Args...>();
+  }
+  else if constexpr (user_defined_serialization<T>) {
+    constexpr auto begin = string_literal<char, 1>{
+        {static_cast<char>(type_id::user_defined_type)}};
+    constexpr auto end =
+        string_literal<char, 1>{{static_cast<char>(type_id::type_end_flag)}};
+    if constexpr (user_defined_type_name<T>) {
+      constexpr auto type_name = sp_set_type_name((T *)nullptr);
+      string_literal<char, type_name.size()> ret{type_name};
+      return begin + ret + end;
+    }
+    else {
+      constexpr auto type_name = type_string<T>();
+      string_literal<char, type_name.size()> ret{type_name};
+      return begin + ret + end;
+    }
   }
   else {
     constexpr auto root_id = get_type_id<remove_cvref_t<T>>();
@@ -659,17 +722,12 @@ template <uint64_t conf, typename T>
 constexpr bool check_if_add_type_literal() {
   constexpr auto config = conf & 0b11;
   if constexpr (config == sp_config::DEFAULT) {
-    if constexpr (struct_pack::detail::user_defined_config<T>) {
-      constexpr auto config = set_sp_config((T *)nullptr) & 0b11;
-      if constexpr (config == sp_config::DEFAULT) {
-        return serialize_static_config<T>::has_type_literal;
-      }
-      else {
-        return config == sp_config::ENABLE_TYPE_INFO;
-      }
+    constexpr auto config = get_type_config<T>() & 0b11;
+    if constexpr (config == sp_config::DEFAULT) {
+      return serialize_static_config<T>::has_type_literal;
     }
     else {
-      return serialize_static_config<T>::has_type_literal;
+      return config == sp_config::ENABLE_TYPE_INFO;
     }
   }
   else {
@@ -729,8 +787,14 @@ constexpr bool check_if_has_container() {
         return false;
       }
       else if constexpr (unique_ptr<Arg>) {
-        return check_if_has_container<
-            remove_cvref_t<typename Arg::element_type>, Arg, ParentArgs...>();
+        if constexpr (is_base_class<typename Arg::element_type>) {
+          // We can't make sure if derived class has container or not
+          return true;
+        }
+        else {
+          return check_if_has_container<
+              remove_cvref_t<typename Arg::element_type>, Arg, ParentArgs...>();
+        }
       }
       else if constexpr (id == type_id::container_t ||
                          id == type_id::string_t ||
@@ -759,16 +823,13 @@ constexpr bool check_if_has_container() {
 template <uint64_t conf, typename T>
 constexpr bool check_if_disable_hash_head_impl() {
   constexpr auto config = conf & 0b11;
-  if constexpr (config != sp_config::DISABLE_ALL_META_INFO) {
-    if constexpr (struct_pack::detail::user_defined_config<T>) {
-      constexpr auto config = set_sp_config((T *)nullptr) & 0b11;
-      if constexpr (config == sp_config::DISABLE_ALL_META_INFO) {
-        return true;
-      }
-    }
-    return false;
+  if constexpr (config == sp_config::DEFAULT) {
+    constexpr auto config = get_type_config<T>() & 0b11;
+    return config == sp_config::DISABLE_ALL_META_INFO;
   }
-  return true;
+  else {
+    return config == sp_config::DISABLE_ALL_META_INFO;
+  }
 }
 
 template <uint64_t conf, typename T>
@@ -796,13 +857,18 @@ constexpr bool check_has_metainfo() {
 template <typename U>
 constexpr auto get_types() {
   using T = remove_cvref_t<U>;
-  if constexpr (std::is_fundamental_v<T> || std::is_enum_v<T> || varint_t<T> ||
-                string<T> || container<T> || optional<T> || unique_ptr<T> ||
-                is_variant_v<T> || expected<T> || array<T> || c_array<T> ||
-                std::is_same_v<std::monostate, T> || bitset<T>
+  if constexpr (user_defined_serialization<T>) {
+    return declval<std::tuple<T>>();
+  }
+  else if constexpr (std::is_fundamental_v<T> || std::is_enum_v<T> ||
+                     varint_t<T> || string<T> || container<T> ||
+                     ylt::reflection::optional<T> || unique_ptr<T> ||
+                     is_variant_v<T> || ylt::reflection::expected<T> ||
+                     array<T> || c_array<T> ||
+                     std::is_same_v<std::monostate, T> || bitset<T>
 #if (__GNUC__ || __clang__) && defined(STRUCT_PACK_ENABLE_INT128)
-                || std::is_same_v<__int128, T> ||
-                std::is_same_v<unsigned __int128, T>
+                     || std::is_same_v<__int128, T> ||
+                     std::is_same_v<unsigned __int128, T>
 #endif
   ) {
     return declval<std::tuple<T>>();

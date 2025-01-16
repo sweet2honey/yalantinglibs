@@ -17,11 +17,48 @@
 #include <array>
 #include <cstddef>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <vector>
 
 #include "marco.h"
+
 namespace struct_pack::detail {
+
+template <typename T>
+constexpr std::string_view get_raw_name() {
+#ifdef _MSC_VER
+  return __FUNCSIG__;
+#else
+  return __PRETTY_FUNCTION__;
+#endif
+}
+
+template <auto T>
+constexpr std::string_view get_raw_name() {
+#ifdef _MSC_VER
+  return __FUNCSIG__;
+#else
+  return __PRETTY_FUNCTION__;
+#endif
+}
+
+template <typename T>
+inline constexpr std::string_view type_string() {
+  constexpr std::string_view sample = get_raw_name<int>();
+  constexpr size_t pos = sample.find("int");
+  constexpr std::string_view str = get_raw_name<T>();
+  constexpr auto next1 = str.rfind(sample[pos + 3]);
+#if defined(_MSC_VER)
+  constexpr std::size_t npos = str.find_first_of(" ", pos);
+  if (npos != std::string_view::npos)
+    return str.substr(npos + 1, next1 - npos - 1);
+  else
+    return str.substr(pos, next1 - pos);
+#else
+  return str.substr(pos, next1 - pos);
+#endif
+}
 
 template <typename T>
 using remove_cvref_t = std::remove_cv_t<std::remove_reference_t<T>>;
@@ -82,10 +119,16 @@ constexpr void STRUCT_PACK_INLINE compile_time_unique(
   }
 }
 
+#ifndef __clang__
+#define struct_pack_has_feature(X) false
+#else
+#define struct_pack_has_feature __has_feature
+#endif
+
 #if __cpp_lib_string_resize_and_overwrite >= 202110L
 template <typename ch>
 inline void resize(std::basic_string<ch> &str, std::size_t sz) {
-  str.resize_and_overwrite(sz, [](ch *, std::size_t sz) {
+  str.resize_and_overwrite(sz, [sz](ch *, std::size_t) {
     return sz;
   });
 }
@@ -136,17 +179,32 @@ void string_set_length_hacker(std::string &, std::size_t);
 
 template <typename ch>
 inline void resize(std::basic_string<ch> &raw_str, std::size_t sz) {
-  std::string &str = *reinterpret_cast<std::string *>(&raw_str);
-#if defined(__GLIBCXX__) || defined(_LIBCPP_VERSION) || \
-    defined(_MSVC_STL_VERSION)
-  if (sz > str.capacity()) {
-    str.reserve(sz);
-  }
-  string_set_length_hacker(str, sz);
-  str[sz] = '\0';
+#if defined(_GLIBCXX_USE_CXX11_ABI)
+  constexpr bool is_use_cxx11_abi = _GLIBCXX_USE_CXX11_ABI;
 #else
-  raw_str.resize(sz);
+  constexpr bool is_use_cxx11_abi = true;
 #endif
+  if constexpr (std::is_same_v<ch, char> == false &&
+                is_use_cxx11_abi == false) {
+    raw_str.resize(sz);
+  }
+  else {
+#if defined(__SANITIZE_ADDRESS__) ||              \
+    struct_pack_has_feature(address_sanitizer) || \
+    (!defined(NDEBUG) && defined(_MSVC_STL_VERSION))
+    raw_str.resize(sz);
+#elif defined(__GLIBCXX__) || defined(_LIBCPP_VERSION) || \
+    defined(_MSVC_STL_VERSION)
+    if (sz > raw_str.capacity()) {
+      raw_str.reserve(sz);
+    }
+    std::string &str = *reinterpret_cast<std::string *>(&raw_str);
+    string_set_length_hacker(str, sz);
+    *(raw_str.data() + sz) = 0;
+#else
+    raw_str.resize(sz);
+#endif
+  }
 }
 
 #endif
@@ -193,17 +251,21 @@ template class vector_thief<decltype(&std::vector<char>::_Mypair),
 
 template <typename ch>
 inline void resize(std::vector<ch> &raw_vec, std::size_t sz) {
-#if defined(__GLIBCXX__) ||                                       \
+#if defined(__SANITIZE_ADDRESS__) || struct_pack_has_feature(address_sanitizer)
+  raw_vec.resize(sz);
+#elif defined(__GLIBCXX__) ||                                     \
     (defined(_LIBCPP_VERSION) && defined(_LIBCPP_HAS_NO_ASAN)) || \
     defined(_MSVC_STL_VERSION)
   std::vector<char> &vec = *reinterpret_cast<std::vector<char> *>(&raw_vec);
-  vec.reserve(sz);
-  vector_set_length_hacker(vec, sz);
+  vec.reserve(sz * sizeof(ch));
+  vector_set_length_hacker(vec, sz * sizeof(ch));
 #else
   raw_vec.resize(sz);
 #endif
 }
 #endif
+
+#undef struct_pack_has_feature
 
 template <typename T>
 inline void resize(T &str, std::size_t sz) {

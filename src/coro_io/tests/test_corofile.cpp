@@ -15,6 +15,7 @@
 #include <ylt/coro_io/io_context_pool.hpp>
 
 namespace fs = std::filesystem;
+using namespace coro_io;
 
 constexpr uint64_t KB = 1024;
 constexpr uint64_t MB = 1024 * KB;
@@ -24,7 +25,8 @@ std::vector<char> create_filled_vec(std::string fill_with,
                                     size_t size = block_size) {
   if (fill_with.empty() || size == 0)
     return std::vector<char>{};
-  std::vector<char> ret(size);
+  std::vector<char> ret;
+  ret.resize(size);
   size_t fill_with_size = fill_with.size();
   int cnt = size / fill_with_size;
   int remain = size % fill_with_size;
@@ -37,7 +39,7 @@ std::vector<char> create_filled_vec(std::string fill_with,
   return ret;
 }
 void create_file(std::string filename, size_t file_size,
-                 const std::vector<char>& fill_with_vec) {
+                 const std::vector<char> &fill_with_vec) {
   std::ofstream file(filename, std::ios::binary);
   file.exceptions(std::ios_base::failbit | std::ios_base::badbit);
 
@@ -61,116 +63,323 @@ void create_file(std::string filename, size_t file_size,
   return;
 }
 
-// TODO: will revert later.
-// TEST_CASE("multithread for balance") {
-//   size_t total = 100;
-//   std::vector<std::string> filenames;
-//   for (size_t i = 0; i < total; ++i) {
-//     filenames.push_back("temp" + std::to_string(i + 1));
-//   }
-//
-//   std::vector<std::string> write_str_vec;
-//   char ch = 'a';
-//   for (int i = 0; i < 26; ++i) {
-//     std::string str(100, ch + i);
-//     write_str_vec.push_back(std::move(str));
-//   }
-//
-//   std::vector<async_simple::coro::Lazy<void>> write_vec;
-//   auto write_file_func =
-//       [&write_str_vec](std::string filename,
-//                        int index) mutable -> async_simple::coro::Lazy<void> {
-//     coro_io::coro_file file(filename, coro_io::open_mode::write,
-//                             coro_io::get_global_block_executor<
-//                                 coro_io::multithread_context_pool>());
-//     CHECK(file.is_open());
-//
-//     size_t id = index % write_str_vec.size();
-//     auto& str = write_str_vec[id];
-//     auto ec = co_await file.async_write(str.data(), str.size());
-//     CHECK(!ec);
-//     co_return;
-//   };
-//
-//   for (size_t i = 0; i < total; ++i) {
-//     write_vec.push_back(write_file_func(filenames[i], i));
-//   }
-//
-//   auto wait_func =
-//       [write_vec =
-//            std::move(write_vec)]() mutable -> async_simple::coro::Lazy<void>
-//            {
-//     co_await async_simple::coro::collectAll(std::move(write_vec));
-//   };
-//
-//   async_simple::coro::syncAwait(wait_func());
-//
-//   std::cout << "write finished\n";
-//
-//   // read and compare
-//   std::vector<async_simple::coro::Lazy<void>> read_vec;
-//
-//   auto read_file_func =
-//       [&write_str_vec](std::string filename,
-//                        int index) mutable -> async_simple::coro::Lazy<void> {
-//     coro_io::coro_file file(filename, coro_io::open_mode::read,
-//                             coro_io::get_global_block_executor<
-//                                 coro_io::multithread_context_pool>());
-//     CHECK(file.is_open());
-//
-//     size_t id = index % write_str_vec.size();
-//     auto& str = write_str_vec[id];
-//     std::string buf;
-//     buf.resize(write_str_vec.back().size());
-//
-//     std::error_code ec;
-//     size_t read_size;
-//     std::tie(ec, read_size) = co_await file.async_read(buf.data(),
-//     buf.size()); CHECK(!ec); bool ok = (str == buf); if (!ok) {
-//       std::cout << "str: " << str << "\n";
-//       std::cout << "read buf: " << buf << "\n";
-//     }
-//     CHECK(ok);
-//     co_return;
-//   };
-//
-//   for (size_t i = 0; i < total; ++i) {
-//     read_vec.push_back(read_file_func(filenames[i], i));
-//   }
-//
-//   auto wait_read_func =
-//       [read_vec =
-//            std::move(read_vec)]() mutable -> async_simple::coro::Lazy<void> {
-//     co_await async_simple::coro::collectAll(std::move(read_vec));
-//   };
-//
-//   async_simple::coro::syncAwait(wait_read_func());
-//   std::cout << "read finished\n";
-//
-//   std::error_code ec;
-//   for (auto& filename : filenames) {
-//     fs::remove(fs::path(filename), ec);
-//     if (ec) {
-//       std::cout << "remove file error: " << ec.message() << "\n";
-//     }
-//   }
-// }
+void create_files(const std::vector<std::string> &files, size_t file_size) {
+  std::string content(file_size, 'A');
+  for (auto &filename : files) {
+    std::ofstream out(filename, std::ios::binary);
+    out.write(content.data(), content.size());
+  }
+}
 
-async_simple::coro::Lazy<void> foo() { co_return; }
+template <coro_io::execution_type execute_type>
+void test_random_read_write(std::string_view filename) {
+  create_files({std::string(filename)}, 190);
+  coro_io::basic_random_coro_file<execute_type> file(filename, std::ios::in);
+  CHECK(file.is_open());
+#if defined(ENABLE_FILE_IO_URING) || defined(ASIO_WINDOWS)
+  if (execute_type == coro_io::execution_type::native_async) {
+    CHECK(file.get_execution_type() == coro_io::execution_type::native_async);
+  }
+#else
+  CHECK(file.get_execution_type() == coro_io::execution_type::thread_pool);
+#endif
 
-TEST_CASE("test currentThreadInExecutor") {
-  CHECK(*coro_io::get_current() == nullptr);
-  CHECK(coro_io::get_global_executor()->currentContextId() == 0);
-  CHECK_NOTHROW(
-      async_simple::coro::syncAwait(foo().via(coro_io::get_global_executor())));
-  auto executor = coro_io::get_global_executor();
+  char buf[100];
+  auto pair = async_simple::coro::syncAwait(file.async_read_at(0, buf, 10));
+  CHECK(std::string_view(buf, pair.second) == "AAAAAAAAAA");
+  CHECK(!file.eof());
 
-  foo().via(executor).start([executor](auto&&) {
-    auto ptr = &executor->get_asio_executor().context();
-    CHECK(ptr == *coro_io::get_current());
-    size_t id = executor->currentContextId();
-    CHECK(id > 0);
-  });
+  pair = async_simple::coro::syncAwait(file.async_read_at(10, buf, 100));
+  CHECK(!file.eof());
+  CHECK(pair.second == 100);
+
+  pair = async_simple::coro::syncAwait(file.async_read_at(110, buf, 100));
+  CHECK(pair.second == 80);
+
+  // only read size equal 0 is eof.
+  pair = async_simple::coro::syncAwait(file.async_read_at(200, buf, 100));
+  CHECK(file.eof());
+  CHECK(pair.second == 0);
+
+  coro_io::basic_random_coro_file<execute_type> file1;
+  file1.open(filename, std::ios::out);
+  CHECK(file1.is_open());
+  std::string buf1 = "cccccccccc";
+  async_simple::coro::syncAwait(file1.async_write_at(0, buf1));
+
+  std::string buf2 = "dddddddddd";
+  async_simple::coro::syncAwait(file1.async_write_at(10, buf2));
+}
+
+template <coro_io::execution_type execute_type>
+void test_seq_read_write(std::string_view filename) {
+  create_files({std::string(filename)}, 190);
+  coro_io::basic_seq_coro_file<execute_type> file(filename,
+                                                  std::ios::in | std::ios::out);
+  CHECK(file.is_open());
+#if defined(ENABLE_FILE_IO_URING) || defined(ASIO_WINDOWS)
+  if (execute_type == coro_io::execution_type::native_async) {
+    CHECK(file.get_execution_type() == coro_io::execution_type::native_async);
+  }
+#else
+  CHECK(file.get_execution_type() == coro_io::execution_type::thread_pool);
+#endif
+  char buf[100];
+  std::error_code ec;
+  size_t size;
+  std::tie(ec, size) = async_simple::coro::syncAwait(file.async_read(buf, 10));
+  CHECK(size == 10);
+
+  std::string str = "test";
+  std::tie(ec, size) = async_simple::coro::syncAwait(file.async_write(str));
+  CHECK(size == 4);
+}
+
+TEST_CASE("test seq and random") {
+  std::string filename = "validate.tmp";
+  {
+    test_random_read_write<coro_io::execution_type::thread_pool>(filename);
+    test_random_read_write<coro_io::execution_type::native_async>(filename);
+  }
+  {
+    test_seq_read_write<coro_io::execution_type::thread_pool>(filename);
+    test_seq_read_write<coro_io::execution_type::native_async>(filename);
+  }
+}
+
+async_simple::coro::Lazy<void> read_seek(std::string filename) {
+  coro_io::coro_file file{};
+  file.open(filename, std::ios::in);
+  CHECK(file.is_open());
+  std::string str;
+  str.resize(200);
+
+  {
+    auto pair = co_await file.async_read(str.data(), 10);
+    CHECK(pair.second == 10);
+    CHECK(!file.eof());
+  }
+  {
+    bool ok = file.seek(10, std::ios::beg);
+    CHECK(ok);
+  }
+  {
+    auto pair = co_await file.async_read(str.data(), str.size());
+    CHECK(pair.second == 5);
+    CHECK(file.eof());
+  }
+
+  // bool ok = file.seek(100, std::ios::beg);
+  // CHECK(!ok);
+}
+
+async_simple::coro::Lazy<void> write_seek(std::string filename) {
+  coro_io::coro_file file{};
+  file.open(filename, std::ios::in | std::ios::out | std::ios::trunc);
+  CHECK(file.is_open());
+  std::string str = "hello";
+
+  {
+    co_await file.async_write(str);
+    std::string result;
+    result.resize(10);
+    CHECK(file.seek(0, std::ios::beg));
+    auto [rd_ec, size] = co_await file.async_read(result.data(), 5);
+    std::string_view s(result.data(), size);
+    CHECK(s == "hello");
+  }
+  {
+    bool ok = file.seek(10, std::ios::beg);
+    CHECK(ok);
+    co_await file.async_write(str);
+    CHECK(file.seek(10, std::ios::beg));
+    std::string result;
+    result.resize(10);
+    auto [rd_ec, size] = co_await file.async_read(result.data(), 5);
+    std::string_view s(result.data(), size);
+    CHECK(s == "hello");
+  }
+}
+
+TEST_CASE("coro_file seek read and write") {
+  async_simple::coro::syncAwait(write_seek("seek_file.txt"));
+  async_simple::coro::syncAwait(read_seek("seek_file.txt"));
+}
+
+TEST_CASE("coro_file pread and pwrite basic test") {
+  std::string filename = "test.tmp";
+  create_files({filename}, 190);
+  {
+    basic_random_coro_file<execution_type::thread_pool> file(filename,
+                                                             std::ios::in);
+    CHECK(file.is_open());
+
+    char buf[100];
+    auto pair = async_simple::coro::syncAwait(file.async_read_at(0, buf, 10));
+    CHECK(std::string_view(buf, pair.second) == "AAAAAAAAAA");
+    CHECK(!file.eof());
+
+    pair = async_simple::coro::syncAwait(file.async_read_at(10, buf, 100));
+    CHECK(!file.eof());
+    CHECK(pair.second == 100);
+
+    pair = async_simple::coro::syncAwait(file.async_read_at(110, buf, 100));
+    CHECK(!file.eof());
+    CHECK(pair.second == 80);
+
+    // only read size equal 0 is eof.
+    pair = async_simple::coro::syncAwait(file.async_read_at(200, buf, 100));
+    CHECK(file.eof());
+    CHECK(pair.second == 0);
+  }
+
+#if defined(ENABLE_FILE_IO_URING)
+  {
+    random_coro_file file(filename, std::ios::in);
+    CHECK(file.is_open());
+
+    char buf[100];
+    auto pair = async_simple::coro::syncAwait(file.async_read_at(0, buf, 10));
+    CHECK(std::string_view(buf, pair.second) == "AAAAAAAAAA");
+    CHECK(!file.eof());
+
+    pair = async_simple::coro::syncAwait(file.async_read_at(10, buf, 100));
+    CHECK(!file.eof());
+    CHECK(pair.second == 100);
+
+    pair = async_simple::coro::syncAwait(file.async_read_at(110, buf, 100));
+    CHECK(pair.second == 80);
+
+    // only read size equal 0 is eof.
+    pair = async_simple::coro::syncAwait(file.async_read_at(200, buf, 100));
+    CHECK(file.eof());
+    CHECK(pair.second == 0);
+  }
+
+  {
+    random_coro_file file(filename, std::ios::in | std::ios::out);
+    CHECK(file.is_open());
+
+    std::string buf = "cccccccccc";
+    async_simple::coro::syncAwait(file.async_write_at(0, buf));
+
+    std::string buf1 = "dddddddddd";
+    async_simple::coro::syncAwait(file.async_write_at(10, buf1));
+
+    char buf2[100];
+    auto pair = async_simple::coro::syncAwait(file.async_read_at(0, buf2, 10));
+    CHECK(!file.eof());
+    CHECK(std::string_view(buf2, pair.second) == "cccccccccc");
+
+    pair = async_simple::coro::syncAwait(file.async_read_at(10, buf2, 10));
+    CHECK(!file.eof());
+    CHECK(std::string_view(buf2, pair.second) == "dddddddddd");
+  }
+#endif
+
+  {
+    basic_random_coro_file<execution_type::thread_pool> file(
+        filename, std::ios::in | std::ios::out);
+    CHECK(file.is_open());
+
+    std::string buf = "cccccccccc";
+    auto pair = async_simple::coro::syncAwait(file.async_write_at(0, buf));
+    CHECK(!pair.first);
+
+    std::string buf1 = "dddddddddd";
+    pair = async_simple::coro::syncAwait(file.async_write_at(10, buf1));
+    CHECK(!pair.first);
+
+    char buf2[100];
+    pair = async_simple::coro::syncAwait(file.async_read_at(0, buf2, 10));
+    CHECK(!file.eof());
+    CHECK(std::string_view(buf2, pair.second) == "cccccccccc");
+
+    pair = async_simple::coro::syncAwait(file.async_read_at(10, buf2, 10));
+    CHECK(!file.eof());
+    CHECK(std::string_view(buf2, pair.second) == "dddddddddd");
+  }
+}
+
+TEST_CASE("multithread for balance") {
+  size_t total = 100;
+  std::vector<std::string> filenames;
+  for (size_t i = 0; i < total; ++i) {
+    filenames.push_back("temp" + std::to_string(i + 1));
+  }
+
+  std::vector<std::string> write_str_vec;
+  char ch = 'a';
+  for (int i = 0; i < 26; ++i) {
+    std::string str(100, ch + i);
+    write_str_vec.push_back(std::move(str));
+  }
+
+  std::vector<async_simple::coro::Lazy<void>> write_vec;
+  auto write_file_func =
+      [&write_str_vec](std::string filename,
+                       int index) mutable -> async_simple::coro::Lazy<void> {
+    coro_io::coro_file file(coro_io::get_global_block_executor<
+                            coro_io::multithread_context_pool>());
+    file.open(filename, std::ios::out | std::ios::trunc);
+    CHECK(file.is_open());
+
+    size_t id = index % write_str_vec.size();
+    auto &str = write_str_vec[id];
+    co_await file.async_write(str);
+  };
+
+  for (size_t i = 0; i < total; ++i) {
+    write_vec.push_back(write_file_func(filenames[i], i));
+  }
+
+  auto wait_func =
+      [write_vec =
+           std::move(write_vec)]() mutable -> async_simple::coro::Lazy<void> {
+    co_await async_simple::coro::collectAll(std::move(write_vec));
+  };
+
+  async_simple::coro::syncAwait(wait_func());
+
+  // read and compare
+  std::vector<async_simple::coro::Lazy<void>> read_vec;
+
+  auto read_file_func =
+      [&write_str_vec](std::string filename,
+                       int index) mutable -> async_simple::coro::Lazy<void> {
+    coro_io::coro_file file(coro_io::get_global_block_executor<
+                            coro_io::multithread_context_pool>());
+    file.open(filename, std::ios::in);
+    CHECK(file.is_open());
+
+    size_t id = index % write_str_vec.size();
+    auto &str = write_str_vec[id];
+    std::string buf;
+    buf.resize(write_str_vec.back().size());
+
+    std::error_code ec;
+    size_t read_size;
+    std::tie(ec, read_size) = co_await file.async_read(buf.data(), buf.size());
+    CHECK(!ec);
+    CHECK(str == buf);
+    co_return;
+  };
+
+  for (size_t i = 0; i < total; ++i) {
+    read_vec.push_back(read_file_func(filenames[i], i));
+  }
+
+  auto wait_read_func =
+      [read_vec =
+           std::move(read_vec)]() mutable -> async_simple::coro::Lazy<void> {
+    co_await async_simple::coro::collectAll(std::move(read_vec));
+  };
+
+  async_simple::coro::syncAwait(wait_read_func());
+
+  for (auto &filename : filenames) {
+    fs::remove(fs::path(filename));
+  }
 }
 
 TEST_CASE("read write 100 small files") {
@@ -198,14 +407,13 @@ TEST_CASE("read write 100 small files") {
       [&pool, &write_str_vec](
           std::string filename,
           int index) mutable -> async_simple::coro::Lazy<void> {
-    coro_io::coro_file file(filename, coro_io::open_mode::write);
+    coro_io::coro_file file(pool.get_executor());
+    file.open(filename, std::ios::trunc | std::ios::out);
     CHECK(file.is_open());
 
     size_t id = index % write_str_vec.size();
-    auto& str = write_str_vec[id];
-    auto ec = co_await file.async_write(str.data(), str.size());
-    CHECK(!ec);
-    co_return;
+    auto &str = write_str_vec[id];
+    co_await file.async_write(str);
   };
 
   for (size_t i = 0; i < total; ++i) {
@@ -227,11 +435,12 @@ TEST_CASE("read write 100 small files") {
       [&pool, &write_str_vec](
           std::string filename,
           int index) mutable -> async_simple::coro::Lazy<void> {
-    coro_io::coro_file file(filename);
+    coro_io::coro_file file(pool.get_executor());
+    file.open(filename, std::ios::in);
     CHECK(file.is_open());
 
     size_t id = index % write_str_vec.size();
-    auto& str = write_str_vec[id];
+    auto &str = write_str_vec[id];
     std::string buf;
     buf.resize(write_str_vec.back().size());
 
@@ -258,7 +467,7 @@ TEST_CASE("read write 100 small files") {
   pool.stop();
   thd.join();
 
-  for (auto& filename : filenames) {
+  for (auto &filename : filenames) {
     fs::remove(fs::path(filename));
   }
 }
@@ -274,7 +483,8 @@ TEST_CASE("small_file_read_test") {
     ioc.run();
   });
 
-  coro_io::coro_file file(filename);
+  coro_io::coro_file file(ioc.get_executor());
+  file.open(filename, std::ios::binary | std::ios::in);
   CHECK(file.is_open());
 
   char buf[block_size]{};
@@ -309,23 +519,29 @@ TEST_CASE("large_file_read_test") {
     ioc.run();
   });
 
-  coro_io::coro_file file(filename);
+  coro_io::coro_file file(ioc.get_executor());
+  file.open(filename, std::ios::in);
   CHECK(file.is_open());
 
-  char buf[block_size]{};
   size_t total_size = 0;
   std::error_code ec;
   size_t read_size;
+
   while (!file.eof()) {
+    char buf[block_size]{};
     std::tie(ec, read_size) =
         async_simple::coro::syncAwait(file.async_read(buf, block_size));
     if (ec) {
       std::cout << ec.message() << "\n";
       break;
     }
+
     total_size += read_size;
-    CHECK(std::string_view(block_vec.data(), read_size) ==
-          std::string_view(buf, read_size));
+    CHECK(read_size <= block_size);
+    auto s1 = std::string_view(block_vec.data(), read_size);
+    auto s2 = std::string_view(buf, read_size);
+
+    CHECK(s1 == s2);
   }
   CHECK(total_size == file_size);
   work.reset();
@@ -344,7 +560,8 @@ TEST_CASE("empty_file_read_test") {
     ioc.run();
   });
 
-  coro_io::coro_file file(filename);
+  coro_io::coro_file file(ioc.get_executor());
+  file.open(filename, std::ios::in);
   CHECK(file.is_open());
 
   char buf[block_size]{};
@@ -375,7 +592,8 @@ TEST_CASE("small_file_read_with_pool_test") {
     pool.run();
   });
 
-  coro_io::coro_file file(filename);
+  coro_io::coro_file file(pool.get_executor());
+  file.open(filename, std::ios::in);
   CHECK(file.is_open());
 
   char buf[block_size]{};
@@ -409,7 +627,8 @@ TEST_CASE("large_file_read_with_pool_test") {
     pool.run();
   });
 
-  coro_io::coro_file file(filename);
+  coro_io::coro_file file(pool.get_executor());
+  file.open(filename, std::ios::in);
   CHECK(file.is_open());
 
   char buf[block_size]{};
@@ -441,19 +660,19 @@ TEST_CASE("small_file_write_test") {
     ioc.run();
   });
 
-  coro_io::coro_file file(filename, coro_io::open_mode::write);
-  CHECK(file.is_open());
-
-  char buf[512]{};
-
   std::string file_content_0 = "small_file_write_test_0";
 
-  auto ec = async_simple::coro::syncAwait(
-      file.async_write(file_content_0.data(), file_content_0.size()));
-  if (ec) {
-    std::cout << ec.message() << "\n";
+  coro_io::coro_file file(ioc.get_executor());
+  file.open(filename, std::ios::trunc | std::ios::out);
+  CHECK(file.is_open());
+  async_simple::coro::syncAwait(file.async_write(file_content_0));
+
+  auto &stream = file.get_stream_file();
+  if (stream) {
+    stream.flush();
   }
 
+  char buf[512]{};
   std::ifstream is(filename, std::ios::binary);
   if (!is.is_open()) {
     std::cout << "Failed to open file: " << filename << "\n";
@@ -471,11 +690,13 @@ TEST_CASE("small_file_write_test") {
 
   std::string file_content_1 = "small_file_write_test_1";
 
-  ec = async_simple::coro::syncAwait(
-      file.async_write(file_content_1.data(), file_content_1.size()));
-  if (ec) {
-    std::cout << ec.message() << "\n";
+  async_simple::coro::syncAwait(file.async_write(file_content_1));
+
+  auto &stream1 = file.get_stream_file();
+  if (stream1) {
+    stream1.flush();
   }
+
   is.open(filename, std::ios::binary);
   if (!is.is_open()) {
     std::cout << "Failed to open file: " << filename << "\n";
@@ -505,26 +726,24 @@ TEST_CASE("large_file_write_test") {
     ioc.run();
   });
 
-  coro_io::coro_file file(filename, coro_io::open_mode::write);
+  coro_io::coro_file file(ioc.get_executor());
+  file.open(filename, std::ios::trunc | std::ios::out);
   CHECK(file.is_open());
 
   auto block_vec = create_filled_vec("large_file_write_test");
   int cnt = file_size / block_size;
   int remain = file_size % block_size;
   while (cnt--) {
-    auto ec = async_simple::coro::syncAwait(
-        file.async_write(block_vec.data(), block_size));
-    if (ec) {
-      std::cout << ec.message() << "\n";
-      break;
-    }
+    async_simple::coro::syncAwait(
+        file.async_write({block_vec.data(), block_size}));
   }
   if (remain > 0) {
-    auto ec = async_simple::coro::syncAwait(
-        file.async_write(block_vec.data(), remain));
-    if (ec) {
-      std::cout << ec.message() << "\n";
-    }
+    async_simple::coro::syncAwait(
+        file.async_write({block_vec.data(), (size_t)remain}));
+  }
+  auto &stream = file.get_stream_file();
+  if (stream) {
+    stream.flush();
   }
   CHECK(fs::file_size(filename) == file_size);
   std::ifstream is(filename, std::ios::binary);
@@ -557,18 +776,15 @@ TEST_CASE("empty_file_write_test") {
     ioc.run();
   });
 
-  coro_io::coro_file file(filename, coro_io::open_mode::write);
+  coro_io::coro_file file(ioc.get_executor());
+  file.open(filename, std::ios::trunc | std::ios::out);
   CHECK(file.is_open());
 
   char buf[512]{};
 
   std::string file_content_0 = "small_file_write_test_0";
 
-  auto ec =
-      async_simple::coro::syncAwait(file.async_write(file_content_0.data(), 0));
-  if (ec) {
-    std::cout << ec.message() << "\n";
-  }
+  async_simple::coro::syncAwait(file.async_write({file_content_0.data(), 0}));
 
   std::ifstream is(filename, std::ios::binary);
   if (!is.is_open()) {
@@ -591,17 +807,21 @@ TEST_CASE("small_file_write_with_pool_test") {
     pool.run();
   });
 
-  coro_io::coro_file file(filename, coro_io::open_mode::write);
+  coro_io::coro_file file(pool.get_executor());
+  file.open(filename, std::ios::trunc | std::ios::out);
   CHECK(file.is_open());
 
   char buf[512]{};
 
   std::string file_content_0 = "small_file_write_with_pool_test_0";
 
-  auto ec = async_simple::coro::syncAwait(
-      file.async_write(file_content_0.data(), file_content_0.size()));
-  if (ec) {
-    std::cout << ec.message() << "\n";
+  async_simple::coro::syncAwait(file.async_write(file_content_0));
+
+  {
+    auto &stream1 = file.get_stream_file();
+    if (stream1) {
+      stream1.flush();
+    }
   }
 
   std::ifstream is(filename, std::ios::binary);
@@ -621,11 +841,15 @@ TEST_CASE("small_file_write_with_pool_test") {
 
   std::string file_content_1 = "small_file_write_with_pool_test_1";
 
-  ec = async_simple::coro::syncAwait(
-      file.async_write(file_content_1.data(), file_content_1.size()));
-  if (ec) {
-    std::cout << ec.message() << "\n";
+  async_simple::coro::syncAwait(file.async_write(file_content_1));
+
+  {
+    auto &stream1 = file.get_stream_file();
+    if (stream1) {
+      stream1.flush();
+    }
   }
+
   is.open(filename, std::ios::binary);
   if (!is.is_open()) {
     std::cout << "Failed to open file: " << filename << "\n";
@@ -654,28 +878,29 @@ TEST_CASE("large_file_write_with_pool_test") {
     pool.run();
   });
 
-  coro_io::coro_file file(filename, coro_io::open_mode::write);
+  coro_io::coro_file file(pool.get_executor());
+  file.open(filename, std::ios::trunc | std::ios::out);
   CHECK(file.is_open());
 
   auto block_vec = create_filled_vec("large_file_write_with_pool_test");
   int cnt = file_size / block_size;
   int remain = file_size % block_size;
   while (cnt--) {
-    auto ec = async_simple::coro::syncAwait(
-        file.async_write(block_vec.data(), block_size));
-    if (ec) {
-      std::cout << ec.message() << "\n";
-      break;
-    }
+    async_simple::coro::syncAwait(
+        file.async_write({block_vec.data(), block_size}));
   }
   if (remain > 0) {
-    auto ec = async_simple::coro::syncAwait(
-        file.async_write(block_vec.data(), remain));
-    if (ec) {
-      std::cout << ec.message() << "\n";
-    }
+    async_simple::coro::syncAwait(
+        file.async_write({block_vec.data(), (size_t)remain}));
   }
-  CHECK(fs::file_size(filename) == file_size);
+
+  auto &stream = file.get_stream_file();
+  if (stream) {
+    stream.flush();
+  }
+
+  size_t sz = fs::file_size(filename);
+  CHECK(sz == file_size);
   std::ifstream is(filename, std::ios::binary);
   if (!is.is_open()) {
     std::cout << "Failed to open file: " << filename << "\n";

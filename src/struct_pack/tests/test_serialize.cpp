@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <fstream>
 #include <ratio>
 #include <string_view>
@@ -24,6 +25,11 @@
 #include <type_traits>
 #include <utility>
 #include <variant>
+
+#include "ylt/struct_pack/compatible.hpp"
+#include "ylt/struct_pack/endian_wrapper.hpp"
+#include "ylt/struct_pack/error_code.hpp"
+#include "ylt/struct_pack/reflection.hpp"
 
 #define private public
 #include <ylt/struct_pack.hpp>
@@ -58,14 +64,14 @@ TEST_CASE("testing deserialize") {
   {
     person p2;
     auto res = deserialize_to(p2, ret);
-    CHECK(res == struct_pack::errc{});
+    CHECK(!res);
     CHECK(p2 == p);
   }
   {
     size_t len = 114514;
     person p2;
     auto res = deserialize_to(p2, ret, len);
-    CHECK(res == struct_pack::errc{});
+    CHECK(!res);
     CHECK(p2 == p);
     CHECK(len == ret.size());
   }
@@ -73,7 +79,7 @@ TEST_CASE("testing deserialize") {
     size_t offset = 0;
     person p2;
     auto res = deserialize_to(p2, ret, offset);
-    CHECK(res == struct_pack::errc{});
+    CHECK(!res);
     CHECK(p2 == p);
     CHECK(offset == ret.size());
   }
@@ -109,10 +115,10 @@ TEST_CASE("testing api") {
     serialize_to((char *)my_buffer2.data() + offset, size, p);
     person p1, p2;
     auto ec1 = deserialize_to(p1, my_buffer);
-    CHECK(ec1 == struct_pack::errc{});
+    CHECK(!ec1);
     auto ec2 = deserialize_to(p2, (const char *)my_buffer2.data() + offset,
                               my_buffer2.size() - offset);
-    CHECK(ec2 == struct_pack::errc{});
+    CHECK(!ec2);
     CHECK(p == p1);
     CHECK(p == p2);
   }
@@ -144,7 +150,7 @@ TEST_CASE("testing pack object") {
 
   person p1{};
   auto ec = deserialize_to(p1, ret.data(), ret.size());
-  CHECK(ec == struct_pack::errc{});
+  CHECK(!ec);
   CHECK(p == p1);
 
   CHECK(deserialize_to(p1, ret.data(), 4) ==
@@ -155,7 +161,7 @@ TEST_CASE("testing pack object") {
     ret = serialize(p);
     person p2{};
     ec = deserialize_to(p2, ret.data(), ret.size());
-    CHECK(ec == struct_pack::errc{});
+    CHECK(!ec);
     CHECK(p == p2);
   }
 }
@@ -166,14 +172,14 @@ void test_container(T &v) {
 
   T v1{};
   auto ec = deserialize_to(v1, ret.data(), ret.size());
-  CHECK(ec == struct_pack::errc{});
+  CHECK(!ec);
   CHECK(v == v1);
 
   v.clear();
   v1.clear();
   ret = serialize(v);
   ec = deserialize_to(v1, ret.data(), ret.size());
-  CHECK(ec == struct_pack::errc{});
+  CHECK(!ec);
   CHECK(v1.empty());
   CHECK(v == v1);
 }
@@ -289,7 +295,7 @@ TEST_CASE("testing serialize/deserialize variadic params") {
     int a[5];
     auto res = struct_pack::deserialize_to(a[0], ret.data(), ret.size(), a[1],
                                            a[2], a[3], a[4]);
-    CHECK(res == struct_pack::errc{});
+    CHECK(!res);
     CHECK(a[0] == 1);
     CHECK(a[1] == 2);
     CHECK(a[2] == 3);
@@ -300,7 +306,7 @@ TEST_CASE("testing serialize/deserialize variadic params") {
     auto ret = struct_pack::serialize(1, 2, 3, 4, 5);
     int a[5];
     auto res = struct_pack::deserialize_to(a[0], ret, a[1], a[2], a[3], a[4]);
-    CHECK(res == struct_pack::errc{});
+    CHECK(!res);
     CHECK(a[0] == 1);
     CHECK(a[1] == 2);
     CHECK(a[2] == 3);
@@ -471,7 +477,7 @@ TEST_CASE("testing serialize/deserialize variadic params") {
         std::get<0>(t), ret.data(), ret.size(), std::get<1>(t), std::get<2>(t),
         std::get<3>(t), std::get<4>(t), std::get<5>(t), std::get<6>(t),
         std::get<7>(t));
-    CHECK(res == struct_pack::errc{});
+    CHECK(!res);
     CHECK(std::get<0>(t) == 42);
     CHECK(std::get<1>(t) == 2.71828f);
     CHECK(std::get<2>(t) == 3.1415926);
@@ -498,7 +504,7 @@ TEST_CASE("testing serialize/deserialize variadic params") {
     auto res = struct_pack::deserialize_to(
         std::get<0>(t), ret, std::get<1>(t), std::get<2>(t), std::get<3>(t),
         std::get<4>(t), std::get<5>(t), std::get<6>(t), std::get<7>(t));
-    CHECK(res == struct_pack::errc{});
+    CHECK(!res);
     CHECK(std::get<0>(t) == 42);
     CHECK(std::get<1>(t) == 2.71828f);
     CHECK(std::get<2>(t) == 3.1415926);
@@ -517,7 +523,7 @@ TEST_CASE("testing deserialization") {
   auto ret = serialize(p);
 
   person p1{};
-  CHECK(deserialize_to(p1, ret.data(), ret.size()) == struct_pack::errc{});
+  CHECK(!deserialize_to(p1, ret.data(), ret.size()));
 }
 
 TEST_CASE("testing deserialization with invalid data") {
@@ -651,13 +657,13 @@ TEST_CASE("array test") {
   {
     ar3[117] = test_str;
     [[maybe_unused]] auto ret = deserialize_to(ar3_1, serialize(ar3));
-    CHECK(ret == struct_pack::errc{});
+    CHECK(!ret);
     CHECK(ar3_1[117] == test_str);
   }
   {
     ar4[15472] = test_str;
     auto ret = deserialize_to(ar4_1, serialize(ar4));
-    CHECK(ret == struct_pack::errc{});
+    CHECK(!ret);
     CHECK(ar4_1[15472] == test_str);
   }
 }
@@ -843,7 +849,7 @@ TEST_CASE("test set_value") {
   detail::memory_reader reader(ret.data(), ret.data() + ret.size());
   detail::unpacker in(reader);
   person p2;
-  struct_pack::errc ec;
+  struct_pack::err_code ec;
   std::string s;
   int v;
   int v2 = -1;
@@ -859,18 +865,17 @@ TEST_CASE("test free functions") {
   CHECK(!buffer.empty());
 
   person p1{};
-  CHECK(deserialize_to(p1, buffer.data(), buffer.size()) ==
-        struct_pack::errc{});
+  CHECK(!deserialize_to(p1, buffer.data(), buffer.size()));
 
   std::optional<int> op1{};
   auto buf1 = serialize(op1);
   std::optional<int> op2{};
-  CHECK(deserialize_to(op2, buf1.data(), buf1.size()) == struct_pack::errc{});
+  CHECK(!deserialize_to(op2, buf1.data(), buf1.size()));
   CHECK(!op2.has_value());
 
   op1 = 42;
   auto buf2 = serialize(op1);
-  CHECK(deserialize_to(op2, buf2.data(), buf2.size()) == struct_pack::errc{});
+  CHECK(!deserialize_to(op2, buf2.data(), buf2.size()));
   CHECK(op2.has_value());
   CHECK(op2.value() == 42);
 
@@ -956,8 +961,7 @@ TEST_CASE("test serialize offset") {
   buffer.resize(info.size() + offset);
   serialize_to(buffer.data() + offset, info, p);
   person p2;
-  CHECK(deserialize_to(p2, buffer.data() + offset, info.size()) ==
-        struct_pack::errc{});
+  CHECK(!deserialize_to(p2, buffer.data() + offset, info.size()));
   CHECK(p2 == p);
 
   std::vector<char> buffer2;
@@ -967,8 +971,7 @@ TEST_CASE("test serialize offset") {
   serialize_to_with_offset(buffer2, offset, p);
   CHECK(data_offset + info.size() == buffer2.size());
   person p3;
-  CHECK(deserialize_to(p3, buffer2.data() + data_offset, info.size()) ==
-        struct_pack::errc{});
+  CHECK(!deserialize_to(p3, buffer2.data() + data_offset, info.size()));
   CHECK(p3 == p);
 }
 
@@ -997,14 +1000,14 @@ TEST_CASE("test de_serialize offset") {
     std::string res;
     auto ec = struct_pack::deserialize_to_with_offset(res, ho.data(), ho.size(),
                                                       offset);
-    CHECK(ec == struct_pack::errc{});
+    CHECK(!ec);
     CHECK(res == hi + std::to_string(i));
     CHECK(offset == sizes[i]);
   }
   for (size_t i = 0, offset = 0; i < 100; ++i) {
     std::string res;
     auto ec = struct_pack::deserialize_to_with_offset(res, ho, offset);
-    CHECK(ec == struct_pack::errc{});
+    CHECK(!ec);
     CHECK(res == hi + std::to_string(i));
     CHECK(offset == sizes[i]);
   }
@@ -1093,7 +1096,7 @@ TEST_CASE("test static span") {
       auto buffer = struct_pack::serialize(s);
       span_test s2 = {"", ar2};
       auto ec = struct_pack::deserialize_to(s2, buffer);
-      CHECK(ec == struct_pack::errc{});
+      CHECK(!ec);
       CHECK(s.hello == s2.hello);
       CHECK(ar == ar2);
     }
@@ -1103,7 +1106,7 @@ TEST_CASE("test static span") {
       auto buffer = struct_pack::serialize(s);
       span_test s2 = {"", ar2};
       auto ec = struct_pack::deserialize_to(s2, buffer);
-      CHECK(ec == struct_pack::errc{});
+      CHECK(!ec);
       CHECK(s.hello == s2.hello);
       CHECK(s.ar == ar2);
     }
@@ -1124,7 +1127,7 @@ TEST_CASE("test static span") {
       auto buffer = struct_pack::serialize(s);
       span_test3 s2 = {"", ar2};
       auto ec = struct_pack::deserialize_to(s2, buffer);
-      CHECK(ec == struct_pack::errc{});
+      CHECK(!ec);
       CHECK(s.hello == s2.hello);
       CHECK(ar == ar2);
     }
@@ -1134,7 +1137,7 @@ TEST_CASE("test static span") {
       auto buffer = struct_pack::serialize(s);
       span_test3 s2 = {"", ar2};
       auto ec = struct_pack::deserialize_to(s2, buffer);
-      CHECK(ec == struct_pack::errc{});
+      CHECK(!ec);
       CHECK(s.hello == s2.hello);
       CHECK(s.ar == ar2);
     }
@@ -1160,7 +1163,7 @@ TEST_CASE("test static span") {
       auto buffer = struct_pack::serialize(s);
       span_test5 s2 = {"", ar2};
       auto ec = struct_pack::deserialize_to(s2, buffer);
-      CHECK(ec == struct_pack::errc{});
+      CHECK(!ec);
       CHECK(s.hello == s2.hello);
       CHECK(ar == ar2);
     }
@@ -1172,7 +1175,7 @@ TEST_CASE("test static span") {
       auto buffer = struct_pack::serialize(s);
       span_test5 s2 = {"", ar2};
       auto ec = struct_pack::deserialize_to(s2, buffer);
-      CHECK(ec == struct_pack::errc{});
+      CHECK(!ec);
       CHECK(s.hello == s2.hello);
       CHECK(s.ar == ar2);
     }
@@ -1227,7 +1230,7 @@ TEST_CASE("test dynamic span") {
       auto buffer = struct_pack::serialize(s);
       dspan_test s2;
       auto ec = struct_pack::deserialize_to(s2, buffer);
-      CHECK(ec == struct_pack::errc{});
+      CHECK(!ec);
       CHECK(s.hello == s2.hello);
       CHECK(std::equal(ar.begin(), ar.end(), s2.sp.begin()));
     }
@@ -1236,7 +1239,7 @@ TEST_CASE("test dynamic span") {
       auto buffer = struct_pack::serialize(s);
       dspan_test s2;
       auto ec = struct_pack::deserialize_to(s2, buffer);
-      CHECK(ec == struct_pack::errc{});
+      CHECK(!ec);
       CHECK(s.hello == s2.hello);
       CHECK(std::equal(s.ar.begin(), s.ar.end(), s2.sp.begin()));
     }
@@ -1279,3 +1282,112 @@ TEST_CASE("test dynamic span") {
   }
 }
 #endif
+
+TEST_CASE("test width too big") {
+  SUBCASE("1") {
+    std::string buffer;
+    buffer.push_back(0b11000);
+    auto result = struct_pack::deserialize<struct_pack::DISABLE_ALL_META_INFO,
+                                           std::string>(buffer);
+    REQUIRE(result.has_value() == false);
+    if constexpr (sizeof(std::size_t) < 8) {
+      CHECK(result.error() ==
+            struct_pack::errc::invalid_width_of_container_length);
+    }
+    else {
+      CHECK(result.error() == struct_pack::errc::no_buffer_space);
+    }
+  }
+  SUBCASE("2") {
+    std::string buffer;
+    buffer.push_back(0b11000);
+    std::size_t len = 0;
+    auto result = struct_pack::deserialize<struct_pack::DISABLE_ALL_META_INFO,
+                                           std::string>(buffer, len);
+    REQUIRE(result.has_value() == false);
+    if constexpr (sizeof(std::size_t) < 8) {
+      CHECK(result.error() ==
+            struct_pack::errc::invalid_width_of_container_length);
+    }
+    else {
+      CHECK(result.error() == struct_pack::errc::no_buffer_space);
+    }
+  }
+  SUBCASE("3") {
+    std::string buffer;
+    buffer.push_back(0b11000);
+    auto result =
+        struct_pack::get_field<std::pair<std::string, std::string>, 0,
+                               struct_pack::DISABLE_ALL_META_INFO>(buffer);
+    REQUIRE(result.has_value() == false);
+    if constexpr (sizeof(std::size_t) < 8) {
+      CHECK(result.error() ==
+            struct_pack::errc::invalid_width_of_container_length);
+    }
+    else {
+      CHECK(result.error() == struct_pack::errc::no_buffer_space);
+    }
+  }
+  SUBCASE("4") {
+    std::string buffer;
+    using T = std::pair<std::string, struct_pack::compatible<int>>;
+    auto code = struct_pack::get_type_code<T>() + 1;
+    buffer.resize(4);
+    if constexpr (!struct_pack::detail::is_system_little_endian) {
+      code = struct_pack::detail::bswap32(code);
+    }
+    memcpy(buffer.data(), &code, sizeof(code));
+    buffer.push_back(0b11);
+    auto result = struct_pack::deserialize<
+        std::pair<std::string, struct_pack::compatible<int>>>(buffer);
+    REQUIRE(result.has_value() == false);
+    if constexpr (sizeof(std::size_t) < 8) {
+      CHECK(result.error() ==
+            struct_pack::errc::invalid_width_of_container_length);
+    }
+    else {
+      CHECK(result.error() == struct_pack::errc::no_buffer_space);
+    }
+  }
+}
+
+TEST_CASE("test broken length") {
+  auto buffer =
+      struct_pack::serialize<struct_pack::DISABLE_ALL_META_INFO, std::string>(
+          std::string{"ABCDEFGHIJKL"});
+  if (sizeof(std::size_t) == 8) {
+    buffer[0] = 0b11000;
+    std::size_t i = UINT64_MAX;
+    memcpy(buffer.data() + 1, &i, sizeof(i));
+  }
+  else {
+    buffer[0] = 0b10000;
+    std::size_t i = UINT32_MAX;
+    memcpy(buffer.data() + 1, &i, sizeof(i));
+  }
+  auto result =
+      struct_pack::deserialize<struct_pack::DISABLE_ALL_META_INFO, std::string>(
+          buffer);
+  REQUIRE(result.has_value() == false);
+  CHECK(result.error() == struct_pack::errc::no_buffer_space);
+}
+
+TEST_CASE("test broken length with overflow") {
+  auto buffer =
+      struct_pack::serialize<struct_pack::DISABLE_ALL_META_INFO, std::string>(
+          std::u16string{u"ABCDEFGHIJKL"});
+  if (sizeof(std::size_t) == 8) {
+    buffer[0] = 0b11000;
+    std::size_t i = UINT64_MAX;
+    memcpy(buffer.data() + 1, &i, sizeof(i));
+  }
+  else {
+    buffer[0] = 0b10000;
+    std::size_t i = UINT32_MAX;
+    memcpy(buffer.data() + 1, &i, sizeof(i));
+  }
+  auto result = struct_pack::deserialize<struct_pack::DISABLE_ALL_META_INFO,
+                                         std::u16string>(buffer);
+  REQUIRE(result.has_value() == false);
+  CHECK(result.error() == struct_pack::errc::no_buffer_space);
+}

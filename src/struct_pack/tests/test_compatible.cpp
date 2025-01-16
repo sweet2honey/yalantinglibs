@@ -3,6 +3,7 @@
 
 #include "doctest.h"
 #include "test_struct.hpp"
+#include "ylt/struct_pack/compatible.hpp"
 #include "ylt/struct_pack/endian_wrapper.hpp"
 
 using namespace struct_pack;
@@ -145,7 +146,7 @@ TEST_CASE("test compatible") {
 
     person p;
     auto res = deserialize_to(p, buffer.data(), buffer.size());
-    CHECK(res == struct_pack::errc{});
+    CHECK(!res);
     CHECK(p.name == p1.name);
     CHECK(p.age == p1.age);
 
@@ -158,8 +159,7 @@ TEST_CASE("test compatible") {
     serialize_to(buffer.data(), size2, p);
 
     person1 p2;
-    CHECK(deserialize_to(p2, buffer.data(), buffer.size()) ==
-          struct_pack::errc{});
+    CHECK(!deserialize_to(p2, buffer.data(), buffer.size()));
     CHECK((p2.age == p.age && p2.name == p.name));
   }
   SUBCASE("serialize person 2 person1") {
@@ -171,7 +171,7 @@ TEST_CASE("test compatible") {
 
     person1 p1, p0 = {20, "tom"};
     auto ec = struct_pack::deserialize_to(p1, buffer);
-    CHECK(ec == struct_pack::errc{});
+    CHECK(!ec);
     CHECK(p1 == p0);
   }
   SUBCASE("big compatible metainfo") {
@@ -1308,4 +1308,15 @@ TEST_CASE("test nested trival_serialzable_obj_with_compatible") {
     CHECK(result.has_value());
     CHECK(test_equal(result.value(), a_v1));
   }
+}
+
+struct only_compatible {
+  struct_pack::compatible<int> hi;
+};
+TEST_CASE("test only_compatible") {
+  only_compatible o{0};
+  auto buffer = struct_pack::serialize(o);
+  auto result = struct_pack::deserialize<only_compatible>(buffer);
+  CHECK(result.has_value());
+  CHECK(result->hi == o.hi);
 }

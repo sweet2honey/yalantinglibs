@@ -84,8 +84,9 @@ void basic_usage() {
   {
     auto buffer = struct_pack::serialize_with_offset(/* offset = */ 2, p);
     auto buffer2 = struct_pack::serialize(p);
-    bool result = std::string_view{buffer.data() + 2, buffer.size() - 2} ==
-                  std::string_view{buffer2.data(), buffer2.size()};
+    [[maybe_unused]] bool result =
+        std::string_view{buffer.data() + 2, buffer.size() - 2} ==
+        std::string_view{buffer2.data(), buffer2.size()};
     assert(result);
   }
   // api 6. serialize varadic param
@@ -113,7 +114,7 @@ void basic_usage() {
   {
     person p2;
     [[maybe_unused]] auto ec = struct_pack::deserialize_to(p2, buffer);
-    assert(ec == struct_pack::errc{});
+    assert(!ec);
     assert(p == p2);
   }
   // api 3. partial deserialize
@@ -137,7 +138,7 @@ void basic_usage() {
     auto buffer = struct_pack::serialize(p.age, p2.name);
     [[maybe_unused]] auto result =
         struct_pack::deserialize_to(p3.age, buffer, p3.name);
-    assert(result == struct_pack::errc{});
+    assert(!result);
     assert(p3.age == p.age);
     assert(p3.name == p2.name);
   }

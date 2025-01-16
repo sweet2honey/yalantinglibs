@@ -22,7 +22,7 @@ struct_pack will save the data as little-endian even if the arch is big-endian. 
 | macro      | description |
 | ----------- | ------------------ |
 | STRUCT_PACK_OPTIMIZE               | Allow more extremed loop unrolling to get better performance, but it cost more compile time.    |
-| STRUCT_PACK_ENABLE_UNPORTABLE_TYPE | Enable serialize unportable type, such as wchar_t and wstring. Deserialize them in other platform is ubdefined bevaior. |
+| STRUCT_PACK_ENABLE_UNPORTABLE_TYPE | Enable serialize unportable type, such as wchar_t/std::wstring/std::bitset. Deserialize them in other platform maybe an undefined bevaior. |
 | STRUCT_PACK_ENABLE_INT128 | Enable serialize __int128 and __uint128. Not all compiler support it.
 ## How to speed up serialization/deserialization
 1. use string_view instead of string, use span instead of vector/array.
@@ -40,17 +40,50 @@ struct_pack allows user to configure the content of the metadata via `struct_pac
 | DISABLE_TYPE_INFO  | Prohibit storing full type information in serialized data, even in DEBUG mode|
 | ENABLE_TYPE_INFO | Prohibit storing full type information in serialized data, even in DEBUG mode|
 | DISABLE_META_INFO| Force full type information to be stored in serialized data, even if not in DEBUG mode|
+| ENCODING_WITH_VARINT| encode integer(int32_t,int64_t,uint32_t,uint64_t) as variable length coding|
+| USE_FAST_VARINT| encode integer(int32_t,int64_t,uint32_t,uint64_t) as fast variable length coding|
 
 Note that when serialization is configured with the DISABLE_META_INFO option, it must be ensured that deserialization also uses this option, otherwise the behavior is undefined and the probability is that deserialization will fail.
+
+Also, note that if structure A nests structure B, the configuration for A will not take effect for B.
 
 For example：
 ```cpp
 struct rect {
-  var_int a, b, c, d;
+  int a, b, c, d;
 };
 ```
 
-### Using ADL as a Serialization Configuration
+## global config
+
+`sp_config::default` is default global config, you can also use other config value by following codes:
+
+```cpp
+namespace struct_pack {
+  //default global config
+  constexpr sp_config set_default(sp_config*){ return sp_config::DISABLE_ALL_META_INFO; }
+}
+static_assert(struct_pack::get_needed_size(rect{}).size()==16);
+```
+
+You can have different config value in different code unit(*.cpp file).
+
+### config by class static member
+
+This config takes precedence over global config.
+
+Just add a constexpr static member named `struct_pack_config` to the class
+
+```cpp
+struct rect {
+  int a, b, c, d;
+  constexpr static auto struct_pack_config = struct_pack::DISABLE_ALL_META_INFO;
+};
+```
+
+### config by ADL
+
+ADL configuration takes precedence over class static member.
 
 we can declare a function `set_sp_config` in the same namespace of type `rect`: 
 
@@ -60,16 +93,16 @@ inline constexpr struct_pack::sp_config set_sp_config(rect*) {
 }
 ```
 
-### Configuration using template parameters
+### config by template parameters
 
-For example
+This method has the highest priority and requires the configuration to be passed in as a template parameter each time it is serialised.
+
+Note that the `USE_FAST_VARINT` and `ENCODING_WITH_VARINT` configurations are ineffective here.
 
 ```cpp
 auto buffer = struct_pack::serialize<struct_pack::DISABLE_ALL_META_INFO>(rect{});
 auto result = struct_pack::deserialize<struct_pack::DISABLE_ALL_META_INFO,rect>(buffer);
 ```
-
-When both are configured, the template parameter takes precedence over the ADL.
 
 Currently we do not allow the `DISABLE_ALL_META_INFO` configuration to be enabled with a compatible field.
 
@@ -77,4 +110,24 @@ Currently we do not allow the `DISABLE_ALL_META_INFO` configuration to be enable
 
 1. The type to serialize should be legal struct_pack type.。See document：[struct_pack type system](https://alibaba.github.io/yalantinglibs/en/struct_pack/struct_pack_type_system.html)。
 2. struct_pack support update protocol by add struct_pack::compatible field, which is forward backward compatibility. User should make sure the version number is increment for each update. It's not allow to delete/modify exist field. See : [document](https://alibaba.github.io/yalantinglibs/en/struct_pack/struct_pack_type_system.html#%E5%85%BC%E5%AE%B9%E7%B1%BB%E5%9E%8B)
+3. Using the `YLT_REFL` macro, a maximum of 256(in msvc 124) fields are supported by default. Without using macros, the number of struct members should not exceed 256.
 
+## How to Extend the Limit on Struct Fields
+
+Some users might need to handle structs with hundreds of fields, which may exceed the supported range of yalantinglibs. Due to compile-time and compiler constraints, the number of fields supported by default is limited. Below, we introduce how to modify the source code to increase the field limit.
+
+### Without Using Macros
+
+The default limit is 256 fields. If you need to extend this limit, please modify the file `member_macro.hpp`. At the top of this header file, there is a python script; you can change the number 256 in the code to the number of fields you need. Then run the script, and overwrite the `member_macro.hpp` with the generated C++ code.
+
+### Using the `YLT_REFL` Macro
+
+The default limit is 256 fields (124 fields for MSVC by default). The following issues need to be noted:
+
+#### Compiler Constraints
+
+If you are using the MSVC compiler, you need to use the parameter `/Zc:preprocessor` instead of `/Zc:preprocessor-`. Otherwise, we can only support up to 124 fields for reflection under MSVC.
+
+#### Modifying the `arg_list_macro_gen.hpp` File
+
+At the top of this header file, there is a python script; you can change the field limit in the script to the number of fields you need. Then run the script, and overwrite the `arg_list_macro_gen.hpp` with the generated code.
